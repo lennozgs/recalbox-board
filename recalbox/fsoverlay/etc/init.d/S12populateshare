@@ -1,0 +1,120 @@
+#!/bin/bash
+
+if test "$1" != "start"
+then
+  exit 0
+fi
+
+source /recalbox/scripts/recalbox-includes.sh
+
+IN=/recalbox/share_init
+OUT=/recalbox/share
+# force the creation of some directories
+for DIR in cheats \
+           system/.cache \
+           system/.config/lirc \
+           system/.emulationstation/themes \
+           system/bluetooth \
+           system/configs \
+           system/logs \
+           system/upgrade
+do
+    if test ! -e "$OUT""/""$DIR"
+    then
+        mkdir -p "$OUT""/""$DIR"
+    fi
+done
+
+# directories / files to copy when initializing the user data
+#
+# NO UPDATE IS POSSIBLE ON THESE DIRECTORIES WHEN RECALBOX IS UPDATED
+#
+# there are almost empty, it's just for the structure
+# the user can delete the directory, it will recreate the structure
+# the user can delete files, files will not be recreated
+for FILE in music bios bios/amiga bios/keropi extractions kodi saves saves/amiga screenshots \
+            system/.config/lirc/lircd.conf \
+            system/.emulationstation/{es_input.cfg,es_settings.cfg} \
+            system/{.hatari,.kodi,.atari800.cfg} \
+            system/configs/{advancemame,daphne,dolphin-emu,dosbox,fba,kodi,moonlight,mupen64,ppsspp,reicast,retroarch,shadersets,xarcade2jstick} \
+            system/recalbox.conf \
+            bios/mame2003 \
+            bios/fba \
+            bios/mame2000 \
+            bios/mame2003-plus \
+            bios/mame2010 \
+            bios/np2kai
+do
+    # not wanted for kodi
+    test -e "$IN""/""$FILE" && test ! -e "$OUT""/""$FILE" && cp -r "$IN""/""$FILE" "$OUT""/""$FILE"
+done
+
+# directories to force directories exists
+# files are linked
+#
+# ONLY NEW DIRECTORIES ARE UPDATED WHEN RECALBOX IS UPDATED
+#
+# the user can't delete any directory, otherwise, it will recreate it, with link inside
+# the user can delete links and add its own files
+# to reset the directory or update it, the user has to remove the directory (we are unable to differenciate new files from recalbox update from a file removed by the user)
+for DIR in roms roms/mame/mame2003 system/configs overlays
+do
+    [ ! -e "$OUT""/""$DIR" ] && mkdir "$OUT""/""$DIR"
+    find "$IN""/""$DIR" -mindepth 1 -maxdepth 1 -type d |
+        while read SUBDIR
+        do
+            BNAME=$(basename "$SUBDIR")
+            TDIR="$OUT""/""$DIR""/""$BNAME"
+            if test ! -e "$TDIR" # ASSUME THAT PARENTS ARE LISTED BEFORE CHILDREN
+            then
+                cp -r "$SUBDIR" "$TDIR"
+            fi
+        done
+done
+
+# Sync overlays with roms
+find "$OUT""/roms" -mindepth 1 -maxdepth 1 -type d |
+while read SUBDIR
+do
+	BNAME=$(basename "$SUBDIR")
+	TDIR="$OUT""/overlays/""$BNAME"
+	if test ! -e "$TDIR" # ASSUME THAT PARENTS ARE LISTED BEFORE CHILDREN
+	then
+		mkdir "$TDIR"
+	fi
+done
+
+
+# recalbox.conf : upgrade if necessary
+doRecalboxUpgrades
+
+# ssh : create the ssh key while the -R option of dropbear try a chown or an operation which is not permitted on fat32
+# use /tmp pass-thru to avoid operation not permitted error on fat32
+if ! test -e /recalbox/share/system/ssh
+then
+    mkdir -p /recalbox/share/system/ssh
+    dropbearkey -t ecdsa -f /tmp/dropbear_ecdsa_host_key
+    mv /tmp/dropbear_ecdsa_host_key /recalbox/share/system/ssh/
+    dropbearkey -t rsa   -f /tmp/dropbear_rsa_host_key 
+    mv /tmp/dropbear_rsa_host_key /recalbox/share/system/ssh/
+    dropbearkey -t dss   -f /tmp/dropbear_dss_host_key
+    mv /tmp/dropbear_dss_host_key /recalbox/share/system/ssh/
+fi
+
+# bluetooth : now gotta tar/untar, the directory structure for bluez5 is more complex
+# once untar, delete the cache folder. The exclude tar option of busybox is dreadful
+btTar=/recalbox/share/system/bluetooth/bluetooth.tar
+tar xvf "$btTar" -C / 2>/dev/null 
+
+# udev : create a link for rules persistance
+mkdir -p /recalbox/share/system/udev/rules.d
+rm -rf /run/udev/rules.d
+ln -s /recalbox/share/system/udev/rules.d/ /run/udev/
+test ! -e /recalbox/share/system/recalbox.changelog.done && cp /recalbox/recalbox.changelog /recalbox/share/system/recalbox.changelog.done
+
+# create a uuid if it's missing
+[ ! -e /recalbox/share/system/uuid ] && /recalbox/scripts/system/uuid.sh --uuid-file /recalbox/share/system/uuid
+
+# build the cores list if it doesn't exist
+[ ! -e /recalbox/share/system/configs/retroarch.corenames ] && upgradeRetroarchCoreNames -f /recalbox/share/system/configs/retroarch.corenames
+# END
